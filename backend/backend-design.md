@@ -1,0 +1,51 @@
+# バックエンド設計ガイドライン
+
+- 技術スタック
+  - **言語**: Python
+  - **フレームワーク**: FastAPI
+  - **ORM**: SQLAlchemy
+  - **DB**: PostgreSQL
+- アーキテクチャレイヤー
+  - **レイヤー構成**: views, adapter, application, domain
+    - 同一レイヤーへの参照を許可
+      - ただしcontexts/shared/からcontexts/{resource}/への参照は許可しない
+    - viewsからapplicationへの参照を許可
+    - viewsからdomainへの参照を許可
+    - adapterからapplicationへの参照を許可
+    - adapterからdomainへの参照を許可
+    - applicationからdomainへの参照を許可
+  - **adapter**
+    - WebAPIとしてHTTPリクエストを受け取り、内部のビジネスロジックであるapplication層に処理を委譲する役割を担う
+    - controller, mapper, infrastructure, schema, viewsなどのコンポーネントを含む
+      - **controller**: HTTPリクエストを処理し、application層のユースケースを呼び出すこと
+      - **mapper**: HTTPリクエストやレスポンスからDTOへの変換を行う
+      - **infrastructure**: DBアクセスや外部API呼び出しなど、永続化や通信に関する具体的な実装を行う
+      - **schema**: HTTPリクエストやレスポンスのデータ構造（契約）を定義する
+      - **views**: 画面特化型API（BFF）において、フロントエンドの表示都合に合わせて複数のデータを結合・最適化したレスポンス構造を定義する
+  - **application**
+    - アダプター層からデータを受け取り、ドメイン層のビジネスロジックを呼び出す役割を担う
+    - usecase, dto, exceptionなどのコンポーネントを含む
+      - **usecase**: アプリケーションのユースケースを定義すること。DBアクセスや永続化の処理は行うが、純粋なビジネスルールや判定ロジックはservice層で定義すること
+      - **dto**: データ転送オブジェクトを定義すること
+  - **domain**
+    - ビジネス領域における純粋な業務ルールやデータ構造を定義する層で、アーキテクチャの中心となる。フレームワークやDB事情などに絶対に依存してはいけない
+    - model, repository, serviceなどのコンポーネントを含む
+      - **model**: ドメインモデルを定義すること。DBのテーブル構造やフレームワークの事情などに絶対に依存しないこと
+      - **repository**: ドメインモデルの永続化を担当するが、インターフェースのみを定義し、実装はadapter層のinfrastructureコンポーネントで行うこと
+      - **service**: モデル単体では表現できない純粋なビジネスルールや判定ロジックを定義すること。DBアクセスや永続化の処理はapplication層のusecaseで行い、service内では行わないこと
+- タイムゾーン
+  - アプリ内では常にUTCを使用すること
+  - DBに保存する日時はUTCで保存すること
+  - コンソールログやファイル名など、ユーザーが直接目にする日時は設定されたタイムゾーンで表示すること
+- API設計
+  - **画面特化API(BFF)**: `/views/{page-name}/{ids}`形式とし、ページ単位でAPIを設計する
+  - **REST API**: `/{resource-name}/{ids}`形式とし、集約ルート単位でAPIを設計する
+- **Global Exception Filter**: アプリケーション全体で一貫した例外処理を実装すること
+- データベース
+  - DB依存の機能利用を禁止する
+  - DBのカラム名はスネークケースで命名すること
+- 命名規則
+  - ファイル名はコンポーネント識別をサフィックスで行うこと
+    - 例: `artist_controller.py`, `artist_service.py`, `artist_repository.py`
+  - クラス名はファイル名をアッパーキャメルケースに変換したものとすること
+    - 例: `ArtistController`, `ArtistService`, `ArtistRepository`
