@@ -1,7 +1,5 @@
 # Terraform 環境構築ガイド
 
-<!-- TODO: 本編（Terraform コードの入手〜実行までの手順）はここに記載 -->
-
 ---
 
 ## FAQ・トラブルシューティング
@@ -17,20 +15,26 @@
 
 ### 目次
 
-- [1. インストール関連](#1-インストール関連)
-  - [症状 1-1: `terraform` コマンドが見つからない](#症状-1-1-terraform-コマンドが見つからない)
-  - [症状 1-2: バージョンが要件と合わない](#症状-1-2-バージョンが要件と合わない)
-  - [症状 1-3: 社内プロキシ環境でダウンロード・`init` が通らない](#症状-1-3-社内プロキシ環境でダウンロードinit-が通らない)
-- [2. AWS 認証・credentials 設定](#2-aws-認証credentials-設定)
-  - [症状 2-1: `No valid credential sources found` / `InvalidClientTokenId`](#症状-2-1-no-valid-credential-sources-found--invalidclienttokenid)
-  - [症状 2-2: `UnauthorizedOperation` / `AccessDenied`](#症状-2-2-unauthorizedoperation--accessdenied)
-  - [症状 2-3: 想定と違う AWS アカウント／リージョンにリソースが作られる](#症状-2-3-想定と違う-aws-アカウントリージョンにリソースが作られる)
-  - [症状 2-4: 作業中に突然 `ExpiredToken` が出る（一時認証の失効）](#症状-2-4-作業中に突然-expiredtoken-が出る一時認証の失効)
-- [3. Terraform 実行時エラー](#3-terraform-実行時エラー)
-  - [症状 3-1: `terraform init` が失敗する](#症状-3-1-terraform-init-が失敗する)
-  - [症状 3-2: `Error acquiring the state lock`](#症状-3-2-error-acquiring-the-state-lock)
-  - [症状 3-3: `plan` では差分が無いのに `apply` でエラー](#症状-3-3-plan-では差分が無いのに-apply-でエラー)
-  - [症状 3-4: 既存リソースと名前が衝突する (`AlreadyExists` 系)](#症状-3-4-既存リソースと名前が衝突する-alreadyexists-系)
+- [Terraform 環境構築ガイド](#terraform-環境構築ガイド)
+  - [FAQ・トラブルシューティング](#faqトラブルシューティング)
+    - [目次](#目次)
+  - [1. インストール関連](#1-インストール関連)
+    - [症状 1-1: `terraform` コマンドが見つからない](#症状-1-1-terraform-コマンドが見つからない)
+    - [症状 1-2: バージョンが要件と合わない](#症状-1-2-バージョンが要件と合わない)
+    - [症状 1-3: 社内プロキシ環境でダウンロード・`init` が通らない](#症状-1-3-社内プロキシ環境でダウンロードinit-が通らない)
+  - [2. AWS 認証・credentials 設定](#2-aws-認証credentials-設定)
+    - [症状 2-1: `No valid credential sources found` / `InvalidClientTokenId`](#症状-2-1-no-valid-credential-sources-found--invalidclienttokenid)
+      - [方式 A: `~/.aws/credentials` に貼り付けている場合](#方式-a-awscredentials-に貼り付けている場合)
+      - [方式 B: 環境変数で export している場合](#方式-b-環境変数で-export-している場合)
+    - [症状 2-2: `UnauthorizedOperation` / `AccessDenied`](#症状-2-2-unauthorizedoperation--accessdenied)
+    - [症状 2-3: 想定と違う AWS アカウント／リージョンにリソースが作られる](#症状-2-3-想定と違う-aws-アカウントリージョンにリソースが作られる)
+    - [症状 2-4: 作業中に突然 `ExpiredToken` が出る（一時認証の失効）](#症状-2-4-作業中に突然-expiredtoken-が出る一時認証の失効)
+  - [3. Terraform 実行時エラー](#3-terraform-実行時エラー)
+    - [症状 3-1: `terraform init` が失敗する](#症状-3-1-terraform-init-が失敗する)
+    - [症状 3-2: `Error acquiring the state lock`](#症状-3-2-error-acquiring-the-state-lock)
+    - [症状 3-3: `plan` では差分が無いのに `apply` でエラー](#症状-3-3-plan-では差分が無いのに-apply-でエラー)
+    - [症状 3-4: 既存リソースと名前が衝突する (`AlreadyExists` 系)](#症状-3-4-既存リソースと名前が衝突する-alreadyexists-系)
+  - [🆘 それでも解決しないとき](#-それでも解決しないとき)
 
 ---
 
