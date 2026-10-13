@@ -19,6 +19,7 @@
 
 - `instructions/backend-code-review.instructions.md`: GitHub Copilot用のバックエンドレビューファイル
 
-### **.claude/skills/**
+### **skills/**
 
-- `glue-python-review/`: Claude Code 用の AWS Glue Python コード（PySpark / Python Shell ジョブ）レビュースキル
+- [`README.md`](./skills/README.md): スキルの保管場所と、Codex / Claude Code / Copilot などエージェントごとの配置方法
+- `glue-python-review/`: AWS Glue の Python / PySpark ジョブをレビューするスキル（利用するエージェントに応じて配置先へコピー）
