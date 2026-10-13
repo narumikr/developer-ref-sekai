@@ -18,3 +18,7 @@
 ### **copilot/**
 
 - `instructions/backend-code-review.instructions.md`: GitHub Copilot用のバックエンドレビューファイル
+
+### **.claude/skills/**
+
+- `glue-python-review/`: Claude Code 用の AWS Glue Python コード（PySpark / Python Shell ジョブ）レビュースキル
