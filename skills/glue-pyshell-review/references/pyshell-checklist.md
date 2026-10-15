@@ -45,7 +45,7 @@ for chunk in pd.read_csv(
 ```
 
 - データ量が明らかに小さい（数 MB の設定ファイル、件数の少ないマスタなど）なら、丸ごと読んでよい。その場合も「なぜ小さいと言えるか」をコメントで残させる
-- `/tmp` は容量に限りがある一時領域で、ジョブ終了とともに消える。大きいファイルを複数置く処理では容量を確認させる
+- `/tmp` は一時領域で、ジョブ終了とともに消える。空き容量の目安は約 14 GiB（AWS の Python Shell 実行環境の説明による）。メモリより大きいファイルを `/tmp` に落として分割処理するのは有効だが、複数の大きいファイルを置きっぱなしにする処理では、合計がこの容量に収まるか、処理済みのファイルを消しているかを確認させる
 
 ## 2. 失敗の検知と終了ステータス
 
@@ -100,14 +100,14 @@ Python Shell ではジョブブックマークが使えない。「どこまで�
   resp = s3.list_objects_v2(Bucket=bucket, Prefix=prefix)
   keys = [o["Key"] for o in resp.get("Contents", [])]
 
-  # OK
+  # OK: ページごとに処理し、キーの一覧をすべてメモリに溜めない
   paginator = s3.get_paginator("list_objects_v2")
-  keys = [
-      o["Key"]
-      for page in paginator.paginate(Bucket=bucket, Prefix=prefix)
-      for o in page.get("Contents", [])
-  ]
+  for page in paginator.paginate(Bucket=bucket, Prefix=prefix):
+      for obj in page.get("Contents", []):
+          process(obj["Key"])
   ```
+
+  ページネーションを使っていても、全ページの結果を 1 つのリストに溜めると、オブジェクト数に比例してメモリを使う（1. のメモリの観点）。件数が少ないと確認できる場合を除き、ページごとに処理して進める形にする
 
 - **リトライ**: boto3 には標準でリトライの仕組みがある（明示的に設定しなければ `legacy` モードで、初回を含め最大 5 回試行する）。**`Config` でリトライを設定していないこと自体は問題にしない**。指摘するのは、大量に API を呼ぶ・スロットリングが起きやすい処理などで、実効のリトライ方針が処理に見合っているか疑わしい場合に限る。確認するときの注意点は以下のとおり
   - 実効設定は、コード内の `Config`、AWS 設定ファイル、環境変数（`AWS_RETRY_MODE` / `AWS_MAX_ATTEMPTS`）のどこで決まっているかを確認する
@@ -129,7 +129,7 @@ Python Shell ではジョブブックマークが使えない。「どこまで�
 
 - **完了待ちと失敗判定**: 実行 ID を使って状態を確認し、**失敗系の状態のときに例外にしているか**。完了を待たずに次の処理に進んでいないか
 - **待ちの上限**: ポーリングに上限時間があるか。無限ループになっていないか
-- **SQL の組み立て**: パラメータを文字列連結で SQL に埋め込んでいないか。値がジョブパラメータなど外部から来るなら、想定外の値で SQL が壊れる。パラメータ化クエリ（Athena の `ExecutionParameters`、Redshift Data API の `Parameters`）や、許可する値の検証を検討する。ただし、これらのパラメータが使えるかは boto3 のバージョンに依存するので、7. の library-set と合わせて確認する
+- **SQL の組み立て**: パラメータを文字列連結で SQL に埋め込んでいないか。値がジョブパラメータなど外部から来るなら、想定外の値で SQL が壊れる。パラメータ化クエリ（Athena の `ExecutionParameters`、Redshift Data API の `Parameters`）や、許可する値の検証を検討する。パラメータ化できるのは**値**だけで、テーブル名・列名・データベース名などの**識別子**は置き換えられない。識別子が外部から来る場合は、許可リストとの照合で検証する改善案にする。また、Athena のパラメータ化クエリが使えるのは `SELECT` / `INSERT INTO` / `CTAS` / `UNLOAD` だけで、パラメータは位置指定（`?`）に限られる。対象のクエリの種類で使えるかを確認してから改善案にする。ただし、これらのパラメータが使えるかは boto3 のバージョンに依存するので、7. の library-set と合わせて確認する
 - awswrangler を使っている場合は、`wr.athena.read_sql_query` などが完了待ちや失敗判定を内部で扱っていることが多い。ラッパーの動きを確認した上で、二重に指摘しない
 
 ### Athena
@@ -204,6 +204,7 @@ Python Shell ではジョブブックマークが使えない。「どこまで�
 
 - リトライ（既定の動作、`max_attempts` と `total_max_attempts`）: https://docs.aws.amazon.com/boto3/latest/guide/retries.html
 - ページネーション: https://docs.aws.amazon.com/boto3/latest/guide/paginators.html
+- S3 ListObjectsV2（1 回あたり最大 1,000 件）: https://docs.aws.amazon.com/AmazonS3/latest/API/API_ListObjectsV2.html
 - DynamoDB（`batch_writer()` の自動再送）: https://docs.aws.amazon.com/boto3/latest/guide/dynamodb.html
 
 ### Athena
