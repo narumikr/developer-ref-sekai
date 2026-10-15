@@ -21,5 +21,4 @@
 
 ### **skills/**
 
-- [`README.md`](./skills/README.md): スキルの保管場所と、Codex / Claude Code / Copilot などエージェントごとの配置方法
-- `glue-python-review/`: AWS Glue の Python / PySpark ジョブをレビューするスキル（利用するエージェントに応じて配置先へコピー）
+- `glue-pyspark-review/`: AWS Glue の Python / PySpark ジョブをレビューするスキル（利用するエージェントに応じて配置先へコピー）

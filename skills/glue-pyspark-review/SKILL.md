@@ -1,5 +1,5 @@
 ---
-name: glue-python-review
+name: glue-pyspark-review
 description: AWS Glue ジョブに組み込む Python コード（PySpark / GlueContext / DynamicFrame / Python Shell ジョブ）を、分散処理・メモリ・パーティション・ジョブブックマークなど Glue 特有の観点でレビューする。Glue ジョブのスクリプト、`awsglue` や `pyspark` を import しているファイル、ETL スクリプトのレビュー・改善・パフォーマンス調査・OOM や遅延の原因調査を頼まれたら、ユーザーが「Glue」と明言していなくても必ずこのスキルを使うこと。通常の Python レビュー（FastAPI など）には使わない。
 ---
 

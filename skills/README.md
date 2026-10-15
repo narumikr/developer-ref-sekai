@@ -14,10 +14,10 @@
 | OpenAI Codex | `.agents/skills/<スキル名>/` |
 | GitHub Copilot | `.github/skills/<スキル名>/` |
 
-たとえば `skills/glue-python-review/` を利用する場合は、フォルダー全体を `.claude/skills/glue-python-review/` または `.github/skills/glue-python-review/` に配置します。`SKILL.md` だけでなく、`references/` などの関連ファイルも一緒に配置してください。
+たとえば `skills/glue-pyspark-review/` を利用する場合は、フォルダー全体を `.claude/skills/glue-pyspark-review/` または `.github/skills/glue-pyspark-review/` に配置します。`SKILL.md` だけでなく、`references/` などの関連ファイルも一緒に配置してください。
 
 ## スキル一覧
 
-- [`glue-python-review/`](./glue-python-review/): AWS Glue の Python / PySpark ジョブをレビューするスキル
+- [`glue-pyspark-review/`](./glue-pyspark-review/): AWS Glue の Python / PySpark ジョブをレビューするスキル
 
 新しいスキルを追加するときは、スキル名のフォルダーを作成して `SKILL.md` を置き、この一覧にも追記してください。
