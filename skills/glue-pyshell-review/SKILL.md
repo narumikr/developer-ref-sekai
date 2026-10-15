@@ -1,11 +1,11 @@
 ---
 name: glue-pyshell-review
-description: AWS Glue の Python Shell ジョブ（Spark を使わず、単一マシン上の Python で pandas / boto3 / awswrangler などを使って動くジョブ）のコードを、メモリ上限・失敗検知・再実行時の整合性・boto3 の使い方など小規模ジョブで問題になりやすい観点に絞ってレビューする。ジョブ定義のコマンド名が `pythonshell` のスクリプト、S3 のファイル処理・API 連携・Athena / Redshift へのクエリ発行を行う Glue ジョブのレビュー・改善・不具合調査を頼まれたら、ユーザーが「Python Shell」と明言していなくてもこのスキルを使うこと。`GlueContext` / `pyspark` を使う Spark ETL ジョブや、通常の Python アプリケーション（FastAPI など）のレビューには使わない。
+description: AWS Glue の Python Shell ジョブ（Spark を使わず、単一マシン上の Python で pandas / boto3 / awswrangler などを使って動くジョブ）のコードを、メモリ上限・失敗検知・再実行時の整合性・boto3 の使い方など小規模ジョブで問題になりやすい観点に絞ってレビューする。ジョブ定義のコマンド名が `pythonshell` のスクリプト、S3 のファイル処理・API 連携・Athena / Redshift へのクエリ発行を行う Glue ジョブのレビュー・改善・不具合調査を頼まれたら、ユーザーが「Python Shell」と明言していなくてもこのスキルを使うこと。Python Shell 以外の Glue ジョブや、通常の Python アプリケーション（FastAPI など）のレビューには使わない。
 ---
 
 # AWS Glue Python Shell コードレビュー
 
-Python Shell ジョブは「1 台のマシンで動く普通の Python スクリプト」である。Spark の分散処理の知識はいらない代わりに、次のような壊れ方をする。
+Python Shell ジョブは「1 台のマシンで動く普通の Python スクリプト」である。書き方は普通の Python と同じだが、Glue のジョブとして動かすと次のような壊れ方をする。
 
 - 入力が想定より大きくなり、**1 台のメモリ（1 GB または 16 GB）に載らず OOM** で落ちる
 - 例外を握りつぶして、**処理に失敗したのにジョブが「成功」になり、誰も気づかない**
@@ -26,7 +26,8 @@ Python Shell を選ぶのは、小規模で単純な処理だからである。�
 
 - **ジョブタイプと実装の食い違い**: ジョブ定義（コマンド名 `pythonshell`）とコードの両方を見て、次のように判断する
   - **Python Shell ジョブなのに、コードに Spark の実装がある**（`pyspark` の import、`GlueContext` / `SparkSession` / `SparkContext` の生成、DynamicFrame の利用など）: 🚨High として指摘する。Python Shell の環境には Spark がないため、import やコンテキスト生成の時点でジョブが失敗する可能性が高い。Spark ジョブのコードを流用したときの消し忘れなど、一部だけ残っているケースも同様に扱う。改善案は「Spark を使わない実装に置き換える」とし、どこを置き換えるかを示す
-  - **ジョブ定義が見当たらず、コード全体が Spark 前提で書かれている**: Spark ETL ジョブのコードである可能性が高い。「Python Shell ジョブとして動かすなら上記の High に当たる。Spark ETL ジョブならこのスキルの対象外」と伝え、どちらなのかを確認する
+  - **ジョブ定義が Python Shell ジョブではない**: このスキルの対象外であることを伝えてレビューを終える
+  - **ジョブ定義が見当たらず、コード全体が Spark 前提で書かれている**: 「Python Shell ジョブとして動かすなら上記の High に当たる」と条件付きで伝え、ジョブ定義を確認させる
   - `awsglue.utils.getResolvedOptions` は Python Shell でも使える。`awsglue` の import があるだけで Spark の実装と判断しない
 - **DPU と Python のバージョン**: DPU 0.0625（メモリ 1 GB）か 1（16 GB）か。Python のバージョン
 - **使えるライブラリとそのバージョン**: ジョブ定義の `library-set`（`analytics` / `none`）と、`--additional-python-modules` などで追加・更新しているライブラリ。`analytics` に同梱されるライブラリ（pandas、boto3 など）はバージョンが固定されていて最新ではない。コードが使っている API や引数がそのバージョンで使えるかを確認してから、指摘や改善案の前提にする
