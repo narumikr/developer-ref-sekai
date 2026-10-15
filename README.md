@@ -22,3 +22,4 @@
 ### **skills/**
 
 - `glue-pyspark-review/`: AWS Glue の Python / PySpark ジョブをレビューするスキル（利用するエージェントに応じて配置先へコピー）
+- `glue-pyshell-review/`: AWS Glue の Python Shell ジョブをレビューするスキル（利用するエージェントに応じて配置先へコピー）

@@ -17,8 +17,7 @@ Spark の挙動は処理計画・入力形式・設定で変わる。ここに�
 11. 設定・パラメータ・ログ
 12. 運用・コスト
 13. セキュリティと接続
-14. Python Shell ジョブ
-15. プロジェクト固有ルール
+14. プロジェクト固有ルール
 
 ---
 
@@ -120,7 +119,7 @@ Action（`count()`、`write`、`collect()` など、実際の計算を起こす�
 
 ## 8. ジョブブックマーク
 
-ブックマーク = 前回までに処理した**入力（ソース）**を記録し、次回は新しい分だけを読む機能。Spark ETL ジョブでのみ使える（Python Shell では使えない）。
+ブックマーク = 前回までに処理した**入力（ソース）**を記録し、次回は新しい分だけを読む機能。
 
 押さえるべき仕組み:
 
@@ -186,19 +185,9 @@ Glue ジョブはリトライ・手動再実行・同時実行がありうる。
 - Lake Formation で権限管理しているテーブルを読む場合、その権限モデルに沿ったアクセス方法か（Glue バージョンによって対応方式が異なる）
 - ログに個人情報や機密値を出力していないか
 
-## 14. Python Shell ジョブ
+## 14. プロジェクト固有ルール
 
-Spark ではなく単一マシン上の Python で動く。DPU は 0.0625（メモリ 1 GB）か 1（16 GB）を選べる。
-
-- **実行方式が妥当か**: 少量のファイル処理、API 連携、SQL を Athena / Redshift に投げるだけの処理などには Python Shell が適している。一方、データ量が単一マシンのメモリに対して大きい、または今後増える見込みなら、Spark ETL ジョブや Athena / Redshift への処理移譲を検討する。「Python Shell だから NG」ではなく、データ量と処理内容で判断する
-- **ジョブブックマークは使えない**: 差分処理をするなら、処理済みの管理（処理済みキーの記録、入力のアーカイブ移動など）を自前で実装する必要がある
-- 大きいファイルを `pd.read_csv` で一度に読んでいないか。`chunksize` での分割読み込みや、`usecols` / `pyarrow` で必要な列だけ読むことを検討する
-- boto3 で S3 のオブジェクトを列挙するとき、ページネーション（`get_paginator`）を使っているか。1 回の `list_objects_v2` は最大 1,000 件
-- ローカルの `/tmp` は一時領域で容量に限りがあり、ジョブ終了で消える
-
-## 15. プロジェクト固有ルール
-
-現時点では未定義。定義されるまでは 1〜14 の一般的な観点だけでレビューする。
+現時点では未定義。定義されるまでは 1〜13 の一般的な観点だけでレビューする。
 
 <!-- プロジェクト開始後、命名規則・必須パラメータ・出力先の構成・標準の Glue バージョンなどが決まったらここに追記する -->
 <!-- レビューで同じ指摘が何度も出たら、それをここにルールとして追加するのもよい -->
@@ -209,7 +198,6 @@ Spark ではなく単一マシン上の Python で動く。DPU は 0.0625（メ�
 
 - AWS Glue のバージョン一覧: https://docs.aws.amazon.com/glue/latest/dg/release-notes.html
 - ジョブブックマーク: https://docs.aws.amazon.com/glue/latest/dg/monitor-continuations.html
-- Python Shell ジョブ: https://docs.aws.amazon.com/glue/latest/dg/add-job-python.html
 - AWS Glue 開発者ガイド: https://docs.aws.amazon.com/glue/latest/dg/
 - AWS Glue for Apache Spark のパフォーマンスチューニング（AWS Prescriptive Guidance）: https://docs.aws.amazon.com/prescriptive-guidance/latest/tuning-aws-glue-for-apache-spark/
 - Spark SQL パフォーマンスチューニング: https://spark.apache.org/docs/latest/sql-performance-tuning.html

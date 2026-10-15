@@ -19,5 +19,6 @@
 ## スキル一覧
 
 - [`glue-pyspark-review/`](./glue-pyspark-review/): AWS Glue の Python / PySpark ジョブをレビューするスキル
+- [`glue-pyshell-review/`](./glue-pyshell-review/): AWS Glue の Python Shell ジョブ（小規模な pandas / boto3 処理）をレビューするスキル
 
 新しいスキルを追加するときは、スキル名のフォルダーを作成して `SKILL.md` を置き、この一覧にも追記してください。
