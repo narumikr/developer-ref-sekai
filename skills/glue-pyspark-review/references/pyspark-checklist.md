@@ -52,6 +52,10 @@ result = df.filter(F.col("status") == "active").withColumn("x", F.upper("name"))
 - **`pandas_udf` / `mapInPandas` / `applyInPandas`**: Arrow でまとめて渡すので通常の UDF より速いことが多いが、Python での実行とデータ変換のコストは残る。また、バッチやグループ単位で Executor のメモリに載るため、グループが大きい（`applyInPandas` で特定キーに件数が偏るなど）と Executor が OOM になる。「使えば速い」とは書かず、組み込み関数で表現できないときの選択肢とし、実データ量での計測を勧める
 - **`rdd.map` / `rdd.foreach` などの RDD API**: Catalyst による最適化が効かない。DataFrame API で書けないかを確認する
 - **Executor 内での boto3 呼び出し**: `foreach` や UDF の中で 1 行ずつ S3 / DynamoDB API を呼ぶと、スロットリングやコネクション枯渇が起きる。`foreachPartition` でパーティション単位にクライアントを作りバッチ送信するか、Glue のコネクタ・`write_dynamic_frame` で書き込めないかを確認する
+- **Executor からの外部への書き込みと再実行**: Spark はタスクの失敗時に同じタスクを再試行する。Executor の喪失による再計算や、投機的実行（遅いタスクの複製実行）が有効な場合もあり、**同じパーティションの処理が複数回実行されうる**。そのため、`foreach` / `foreachPartition` / UDF の中で外部サービスへ書き込む処理（API 呼び出し、DB 更新、メッセージ送信など）は、同じ書き込みが 2 回以上起きても安全かを確認する。バッチ化しても、この問題は解決しない
+  - 冪等にする手段の例: 冪等キーによる重複の防止、条件付き書き込み（DynamoDB の条件式など）、UPSERT、下流での重複排除
+  - UDF の中に副作用を持たせない。UDF は最適化や再計算によって、想定と異なる回数だけ実行されることがある
+  - ジョブ全体のリトライ・再実行（9.）でも同じ書き込みが繰り返される点もあわせて確認する
 - **Driver 側での Python ループによる DataFrame 生成**: 日付ごとに `for` で読み込み → `union` を繰り返すと DAG が肥大化する。パスのリストやパーティション条件でまとめて 1 回で読む
 
 ## 3. 読み込み時のパーティション（プルーニング）
@@ -78,8 +82,10 @@ dyf = glueContext.create_dynamic_frame.from_catalog(
 
 - `push_down_predicate` は**パーティション列だけ**に効く。パーティション列でない条件を書いても、読み込むデータは減らない
 - `spark.read` や Spark SQL でカタログテーブルを読む場合は、パーティション列への `filter` で Spark 側のプルーニングが効くことが多い。この場合は `filter` があるだけで「全件読んでいる」と断定しない
-- 実際に何を読んでいるかは、`df.explain()` の `PartitionFilters` / `PushedFilters` や、Spark UI の入力サイズで確認できる。断定できないときは確認方法を添えて指摘する
-- 入力が小さいファイルの大群なら、`additional_options={"groupFiles": "inPartition", "groupSize": "134217728"}` でタスク数の爆発を防ぐ
+- 実際に何を読んでいるかの確認方法は、読み方によって異なる。断定できないときは確認方法を添えて指摘する
+  - **`spark.read` / Spark SQL で読む場合**: `df.explain()` の FileScan に出る `PartitionFilters` が、**パーティションの絞り込み**の指標。`PushedFilters` は、Parquet などのデータソースに押し込まれたフィルター（ファイル内の行グループの読み飛ばしなど）を示すもので、**パーティションが絞られたことの根拠にはならない**。2 つを混同しない
+  - **DynamicFrame（`from_catalog`）で読む場合**: `push_down_predicate` は、カタログからパーティション一覧を取得した後、S3 のファイル一覧を取得する前に Glue が適用するもので、Spark の FileScan の指標とは仕組みが別である。`explain()` の表示だけで効いている・いないを判断せず、Spark UI の入力サイズや読み込んだファイル数で確認する
+- **小さいファイルの大群**: 入力が小さいファイルの大群だと、タスク数が爆発する。`groupFiles: "inPartition"` と `groupSize` でファイルをまとめて読める（テーブルのプロパティ、または `from_options` の接続オプションで指定する）。ただし、**対応する形式は CSV / JSON / XML など**で、**Parquet / ORC / Avro には効かない**。また、入力ファイルが 50,000 を超えると自動で有効になる。形式を確認せずに一律に勧めない
 
 ## 4. 書き込み時のパーティションとファイル数
 
@@ -88,9 +94,12 @@ dyf = glueContext.create_dynamic_frame.from_catalog(
 - **調整方法は一律に決めない**: 適切なファイル数はデータ量・出力先・下流の読み方で変わる。処方箋を 1 つに決め打ちせず、出力データ量の見込みから考えさせる
   - `coalesce(n)`: シャッフル（Executor 間のデータ再配置）なしで減らせるが、上流の処理の並列度まで下がることがある
   - `repartition(n)`: シャッフルが発生し、データを n 個に分散し直す。偏りが緩和されることはあるが、行サイズの違いなどにより、各タスクの処理量やファイルサイズが均等になるとは限らない
-  - `repartition("dt")` のように列だけ指定すると、**同じ値の行は 1 タスクに集まる**。対象日が 1 日分なら全データが 1 タスク = `coalesce(1)` と同じ状態になる。パーティションごとのファイルサイズも保証されない
+  - `repartition("dt")` のように列だけ指定すると、**同じ値の行は 1 タスクに集まる**。対象日が 1 日分なら、シャッフル後の処理と書き出しが 1 タスクに集中する（下記の `repartition(1)` と同じ状態）。パーティションごとのファイルサイズも保証されない
   - Spark の `maxRecordsPerFile` オプションで 1 ファイルの行数上限を設ける方法もある
-- **`coalesce(1)` / `repartition(1)`**: 1 タスクに全データが集まり、並列度がなくなる。大きいデータでは High として指摘する
+- **`coalesce(1)` / `repartition(1)`**: どちらも最終的に 1 タスクで全データを書き出すため、大きいデータでは問題になりうる。ただし、**並列度が失われる範囲が異なる**ので区別して指摘する
+  - `coalesce(1)`: シャッフルなしでパーティションをまとめるため、**上流の処理（読み込み・変換）まで 1 タスクに巻き込まれる**ことがある。重い変換の後に `coalesce(1)` があると、その変換全体が並列に実行されなくなる
+  - `repartition(1)`: シャッフルが入るため、**上流の処理は並列に実行できる**が、シャッフル後の処理と書き出しが 1 タスクに集中する。その 1 タスクのメモリ・ディスクに全データが載る
+  - どうしても 1 ファイルが必要な場合、上流が重いなら `coalesce(1)` より `repartition(1)` の方がよいことが多い。ただし、そもそも 1 ファイルである必要があるか（下流の要件）を先に確認させる。大きいデータで 1 ファイル出力が必要ないなら High として指摘する
 - **形式**: 分析用途の出力は Parquet などの列指向形式にする。CSV / JSON 出力には理由があるかを確認する
 - **カタログへの反映**: 新しいパーティションを書いても Data Catalog に登録されなければ Athena などから見えない。クローラーや `enableUpdateCatalog`、`MSCK REPAIR` / パーティション追加など、反映方法が決まっているか
 
@@ -161,9 +170,12 @@ Glue ジョブはリトライ・手動再実行・同時実行がありうる。
 
 ## 11. 設定・パラメータ・ログ
 
-- S3 パス、DB 名、日付などがハードコードされていないか。`getResolvedOptions(sys.argv, [...])` でジョブパラメータとして受け取る
+この章の項目は、書き方の形式だけで機械的に指摘しない。**運用上の影響がある場合**（環境ごとに値を変えられずデプロイ事故になる、障害時に原因を追えない など）は指摘し、影響がなく好みの範囲なら 💡Suggestion にとどめる。
+
+- **ハードコード**: S3 パス、DB 名、日付など、環境（開発 / 本番）や実行ごとに変わる値がハードコードされていないか。実行ごとに変わらない定数まで外出しを求めない。ジョブパラメータは `getResolvedOptions(sys.argv, [...])` で受け取れる
 - 任意のパラメータを `getResolvedOptions` で必須として扱い、未指定時にジョブが落ちないか
-- `print` ではなく `glueContext.get_logger()` または `logging` を使っているか
+- **ログの内容**: 処理対象（入力パス・対象日など）、処理件数、失敗件数と失敗理由など、**障害時に後から調査できる情報が残っているか**を確認する。不足していれば指摘する。Driver での `print` も標準出力として CloudWatch Logs に残りうるため、`print` を使っていること自体は問題にしない。ログレベルで出し分けたい場合などに `glueContext.get_logger()` や `logging` を 💡Suggestion として提案する
+- **Executor 側のログ**: UDF や `foreachPartition` の中で出したログ（`print` を含む）は Executor のログに出力され、Driver のログには出ない。障害調査でそのログを当てにしている場合は、どこに出るかを確認させる
 - 例外を握りつぶしてジョブが「成功」扱いになっていないか
 
 ## 12. 運用・コスト
@@ -174,12 +186,12 @@ Glue ジョブはリトライ・手動再実行・同時実行がありうる。
 - **タイムアウト・リトライ・同時実行数**: 既定値任せになっていないか。リトライするなら 9. の冪等性が前提になる
 - **OOM の対処**: DPU やワーカーサイズを増やせば解決するとは限らない。Driver 集約（1.）、偏り（6.）、巨大なパーティションやグループ（2.・4.）など根本原因を先に疑う
 - **シャッフルによるディスク逼迫**: 大きいシャッフルでメモリから溢れたデータがローカルディスクに書かれ（spill）、ディスクが尽きて失敗することがある。シャッフル量を減らす、パーティション数を調整するなどを検討する
-- **調査手段**: 遅い・落ちる原因の調査には Glue の Spark UI（どのステージ・タスクが遅いか、spill やスキューの有無）と CloudWatch のジョブメトリクスを使うよう勧める
+- **調査手段**: 遅い・落ちる原因の調査には Glue の Spark UI（どのステージ・タスクが遅いか、spill やスキューの有無）と CloudWatch のジョブメトリクスを使うよう勧める。Glue コンソールの Spark UI は Glue 3.0 以降で使えるが、ジョブ設定で Spark UI（イベントログの S3 への保存）を有効にしておく必要がある。無効のままだと、問題が起きた実行を後から調べられない
 
 ## 13. セキュリティと接続
 
 - 認証情報のハードコードがないか。AWS リソースへのアクセスはジョブの IAM ロールで行い、DB のパスワードなどは Secrets Manager や Glue Connection から取得する
-- IAM ロールの権限が最小限か（バケット全体・`*` への権限になっていないか）
+- IAM ロールの権限が、ジョブが行う操作とリソースに対して最小限か。`*` やバケット全体への権限があるだけで過剰権限と判定しない（AWS の操作には、リソースを個別に指定できず `*` が必要なものもある）。必要な操作・リソースより明らかに広い権限（使わない操作の許可、無関係なバケットへの書き込み など）を指摘し、`*` を使っている場合は、その理由が説明できるかを確認する
 - 出力先や一時ディレクトリの暗号化（KMS、Glue のセキュリティ設定）が要件どおりか
 - VPC 内のリソース（RDS など）に接続する場合、Glue Connection、サブネット、セキュリティグループ、ルートの構成が前提として整理されているか。S3 などの AWS サービスへ閉域で接続する要件がある場合は、VPC エンドポイントの有無も確認する（常に必要なわけではない）
 - Lake Formation で権限管理しているテーブルを読む場合、その権限モデルに沿ったアクセス方法か（Glue バージョンによって対応方式が異なる）
@@ -196,8 +208,20 @@ Glue ジョブはリトライ・手動再実行・同時実行がありうる。
 
 ## 主な参考ドキュメント
 
-- AWS Glue のバージョン一覧: https://docs.aws.amazon.com/glue/latest/dg/release-notes.html
+### AWS Glue
+
+- AWS Glue のバージョン一覧（各バージョンの Spark / Python のバージョン）: https://docs.aws.amazon.com/glue/latest/dg/release-notes.html
 - ジョブブックマーク: https://docs.aws.amazon.com/glue/latest/dg/monitor-continuations.html
+- パーティション（`push_down_predicate`、`catalogPartitionPredicate`、`partitionKeys`）: https://docs.aws.amazon.com/glue/latest/dg/aws-glue-programming-etl-partitions.html
+- 入力ファイルのグループ化（`groupFiles` / `groupSize`、対応形式）: https://docs.aws.amazon.com/glue/latest/dg/grouping-input-files.html
+- DynamicFrame クラス（`toDF()`、`resolveChoice` と choice 型）: https://docs.aws.amazon.com/glue/latest/dg/aws-glue-api-crawler-pyspark-extensions-dynamic-frame.html
+- Spark UI（利用条件、有効化）: https://docs.aws.amazon.com/glue/latest/dg/monitor-spark-ui.html
 - AWS Glue 開発者ガイド: https://docs.aws.amazon.com/glue/latest/dg/
 - AWS Glue for Apache Spark のパフォーマンスチューニング（AWS Prescriptive Guidance）: https://docs.aws.amazon.com/prescriptive-guidance/latest/tuning-aws-glue-for-apache-spark/
+
+### Apache Spark
+
+以下のリンクは最新版（latest）のドキュメントを指す。ジョブが動いている Spark のバージョンは Glue のバージョンによって異なるので、上記のバージョン一覧でジョブの Spark のバージョンを確認し、必要に応じて同じバージョンのドキュメントと照合する。
+
 - Spark SQL パフォーマンスチューニング: https://spark.apache.org/docs/latest/sql-performance-tuning.html
+- `DataFrame.coalesce`（`coalesce(1)` と `repartition` の違い）: https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.DataFrame.coalesce.html
