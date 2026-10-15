@@ -65,16 +65,19 @@ for key in keys:
         logger.error(f"failed: {key} {e}")
 
 # OK: 失敗を集計し、最後にジョブを失敗させる
-failed = []
+failed_count = 0
+failed_samples = []  # 件数が多くてもメモリを使い過ぎないよう、サンプルだけ保持する
 for key in keys:
     try:
         process(key)
     except Exception:
         logger.exception("failed: %s", key)
-        failed.append(key)
+        failed_count += 1
+        if len(failed_samples) < 10:
+            failed_samples.append(key)
 
-if failed:
-    raise RuntimeError(f"{len(failed)} / {len(keys)} files failed: {failed[:10]}")
+if failed_count:
+    raise RuntimeError(f"{failed_count} / {len(keys)} files failed (sample: {failed_samples})")
 ```
 
 ## 3. 再実行・失敗時の整合性（冪等性）
@@ -106,20 +109,44 @@ Python Shell ではジョブブックマークが使えない。「どこまで�
   ]
   ```
 
-- **リトライ**: 大量に API を呼ぶ処理で、スロットリングに対するリトライが考慮されているか。boto3 の `Config(retries={"mode": "standard", "max_attempts": ...})` で設定できる。自前でリトライを書く場合は待ち時間を指数的に伸ばしているか
-- **一括 API の利用**: 1 件ずつ `put_item` するより、DynamoDB の `batch_writer()` などの一括 API を使えないか。一括 API では**一部の項目だけ失敗して返ってくる**ことがある（`UnprocessedItems` など）ので、その扱いを確認する
+- **リトライ**: boto3 には標準でリトライの仕組みがある（明示的に設定しなければ `legacy` モードで、初回を含め最大 5 回試行する）。**`Config` でリトライを設定していないこと自体は問題にしない**。指摘するのは、大量に API を呼ぶ・スロットリングが起きやすい処理などで、実効のリトライ方針が処理に見合っているか疑わしい場合に限る。確認するときの注意点は以下のとおり
+  - 実効設定は、コード内の `Config`、AWS 設定ファイル、環境変数（`AWS_RETRY_MODE` / `AWS_MAX_ATTEMPTS`）のどこで決まっているかを確認する
+  - `Config(retries={"max_attempts": n})` は**初回を含まない**（リトライ回数）。設定ファイルや `AWS_MAX_ATTEMPTS` の `max_attempts` は**初回を含む**（総試行回数）。紛らわしいので、`Config` では総試行回数を表す `total_max_attempts` を使うと明確になる
+  - boto3 のリトライが対象にするのは、スロットリングや一時的なエラーなど特定のエラーだけ。業務的な失敗（バリデーションエラーなど）はリトライされない
+  - 自前でリトライを書いている場合は、待ち時間を指数的に伸ばしているか、boto3 のリトライと二重になって試行回数が膨らんでいないか
+- **一括 API の利用**: 1 件ずつ `put_item` するより、一括 API を使えないか。ただし、一部の項目だけ失敗したときの扱いは API によって異なるので区別する
+  - **DynamoDB の `Table.batch_writer()`**（高レベル API）: 未処理の項目（`UnprocessedItems`）を**自動で再送する**。`batch_writer()` を使っているコードに、`UnprocessedItems` の処理がないことを指摘しない
+  - **`client.batch_write_item()`** などの低レベル API を直接使う場合: レスポンスの `UnprocessedItems` に未処理の項目が返ることがある。これを再送しないと、**エラーにならずに一部のデータが書き込まれない**。再送処理があるかを確認する
+  - その他の一括 API（SQS の `send_message_batch` の `Failed` など）も、部分的な失敗がレスポンスで返る形式のものは同様に確認する
 - **クライアントの生成**: ループの中で毎回 `boto3.client(...)` を作っていないか。ループの外で 1 回作って使い回す
 - **外部 API（HTTP）**: `requests` などでタイムアウトを指定しているか。指定しないと、応答がないときにジョブのタイムアウトまで待ち続ける。レスポンスのステータスコードを確認しているか
 
 ## 5. Athena / Redshift へのクエリ発行
 
-データを Python に持ってこずに SQL で処理させるのは、Python Shell で大きめのデータを扱う良い方法。その場合は以下を確認する。
+データを Python に持ってこずに SQL で処理させるのは、Python Shell で大きめのデータを扱う良い方法。Athena も Redshift Data API も**非同期実行**で、クエリを投げた API はすぐに返る。完了を確認しないまま次に進むのが典型的な不具合になる。
 
-- **完了待ち**: Athena の `start_query_execution` は非同期で、すぐに返る。`get_query_execution` で状態を確認し、**`FAILED` / `CANCELLED` のときに例外にしているか**。完了を待たずに次の処理に進んでいないか
+### 共通
+
+- **完了待ちと失敗判定**: 実行 ID を使って状態を確認し、**失敗系の状態のときに例外にしているか**。完了を待たずに次の処理に進んでいないか
 - **待ちの上限**: ポーリングに上限時間があるか。無限ループになっていないか
+- **SQL の組み立て**: パラメータを文字列連結で SQL に埋め込んでいないか。値がジョブパラメータなど外部から来るなら、想定外の値で SQL が壊れる。パラメータ化クエリ（Athena の `ExecutionParameters`、Redshift Data API の `Parameters`）や、許可する値の検証を検討する。ただし、これらのパラメータが使えるかは boto3 のバージョンに依存するので、7. の library-set と合わせて確認する
+- awswrangler を使っている場合は、`wr.athena.read_sql_query` などが完了待ちや失敗判定を内部で扱っていることが多い。ラッパーの動きを確認した上で、二重に指摘しない
+
+### Athena
+
+- **状態の確認**: `start_query_execution` の後、`get_query_execution` で状態を確認する。`SUCCEEDED` 以外（`FAILED` / `CANCELLED`）を失敗として扱っているか
 - **結果の取得**: 大きい結果を `get_query_results` で取ると、ページネーションが必要で遅い。結果を Python で使わないなら `CTAS` / `UNLOAD` / `INSERT INTO` で S3 やテーブルに直接書かせる
-- **SQL の組み立て**: パラメータを文字列連結で SQL に埋め込んでいないか。値がジョブパラメータなど外部から来るなら、想定外の値で SQL が壊れる。Athena のパラメータ化クエリ（`ExecutionParameters`）や、許可する値の検証を検討する
-- awswrangler を使っている場合は、`wr.athena.read_sql_query` などがこれらを内部で扱っていることが多い。ラッパーの動きを確認した上で、二重に指摘しない
+- **失敗時の部分出力**: `CTAS` / `INSERT INTO` が失敗・キャンセルされた場合、出力先に**途中まで書かれたファイルが残る**ことがある。Athena が削除しない場合があり、残ったファイルが後続のクエリの結果に含まれてしまう。後続処理がその出力先を読むなら、失敗時に出力先をどう扱うか（削除する、出力先を実行ごとに分けて成功時だけ参照先を切り替える など）が決まっているかを確認する
+- **`CTAS` の出力先**: `external_location` は空である必要があり、既存のデータがあると失敗する。再実行時に出力先をどう空けるかが決まっているか（3. の冪等性とあわせて確認）
+
+### Redshift（Data API）
+
+- **状態の確認**: `execute_statement` / `batch_execute_statement` の後、返された `Id` を使って `describe_statement` で状態を確認する。`FINISHED` 以外（`FAILED` / `ABORTED`）を失敗として扱い、`Error` の内容をログに残しているか
+- **`WaitTimeSeconds`**: `execute_statement` / `describe_statement` の `WaitTimeSeconds` で 1 回の呼び出しで待てるのは最大 30 秒。それより長くかかりうるクエリでは、状態が `FINISHED` などになるまで繰り返し確認する必要がある。1 回の待ちで完了した前提で次に進んでいないか
+- **リクエストの冪等性**: `ClientToken` を指定すると、同じリクエストの再送で SQL が二重に実行されるのを防げる。リトライで同じ `INSERT` などが二重に実行されうる処理では、利用を検討する（3. の DB への書き込みの観点もあわせて確認する）
+- **複数の SQL の整合性**: 複数の SQL を `execute_statement` で 1 つずつ投げると、途中で失敗したときに前半だけが反映される。まとめて成否を揃えたいなら `batch_execute_statement` を検討する。既定（`ExecutionMode` が `TRANSACTION`）では 1 つのトランザクションとして実行され、1 つでも失敗すると全体がロールバックされる。`AUTO_COMMIT` を指定している場合は個別にコミットされるので、この前提は成り立たない
+- `WaitTimeSeconds` / `ClientToken` / `ExecutionMode` などは比較的新しいパラメータのため、使える boto3 のバージョンかを 7. の library-set と合わせて確認する
+- `redshift_connector` / `psycopg2` などのドライバーで直接接続している場合は同期実行になる。その場合はトランザクションのコミット・ロールバックと、接続のタイムアウトを確認する
 
 ## 6. データの読み書きと型
 
@@ -132,10 +159,13 @@ Python Shell ではジョブブックマークが使えない。「どこまで�
 
 ## 7. パラメータ・ログ・ライブラリ
 
-- S3 パス、バケット名、日付などがハードコードされていないか。`awsglue.utils.getResolvedOptions(sys.argv, [...])` でジョブパラメータとして受け取る
+この章の項目は、書き方の形式だけで機械的に指摘しない。**運用上の影響がある場合**（環境ごとに値を変えられずデプロイ事故になる、障害時に原因を追えない など）は指摘し、影響がなく好みの範囲なら 💡Suggestion にとどめる。
+
+- **ハードコード**: S3 パス、バケット名、日付などがハードコードされていないか。環境（開発 / 本番）や実行ごとに変わる値がハードコードされていて、変更のたびにコード修正が必要になる・誤った環境に書き込みうる場合に指摘する。実行ごとに変わらない定数まで外出しを求めない。ジョブパラメータは `awsglue.utils.getResolvedOptions(sys.argv, [...])` で受け取れる
 - `getResolvedOptions` は指定した引数をすべて必須として扱う。任意のパラメータを渡していないとジョブが落ちるので、任意のものは `sys.argv` を確認してから取得するなどの対応が必要
-- `print` ではなく `logging` を使い、レベル（INFO / ERROR）を分けているか。処理件数・対象ファイル・失敗件数など、後から調査できる情報が残っているか
-- **追加ライブラリのバージョン**: `--additional-python-modules` などで追加するライブラリのバージョンを固定しているか。固定しないと、ある日の実行から挙動が変わる。ジョブの Python バージョンで動くかも確認する
+- **ログの内容**: 処理対象（ファイル・対象日など）、処理件数、失敗件数と失敗理由など、**障害時に後から調査できる情報が残っているか**を確認する。不足していれば指摘する。`print` の出力も CloudWatch Logs（`/aws-glue/python-jobs/output`）に残るため、`print` を使っていること自体は問題にしない。ログレベルで出し分けたい場合などに `logging` の利用を 💡Suggestion として提案する
+- **library-set と同梱ライブラリのバージョン**: Python 3.9 の Python Shell では、ジョブ定義の `library-set`（`analytics` / `none`）によって最初から使えるライブラリが異なる。`analytics` には pandas / awswrangler / boto3 などが**固定のバージョン**で同梱されており、最新版ではない。コードが使っている API や引数（例えば新しめの boto3 の API パラメータ）が、実際の library-set のバージョンで使えるかを確認してから前提にする。`none` なら pandas なども自分で追加する必要がある
+- **追加ライブラリのバージョン**: `--additional-python-modules` などで追加・更新するライブラリのバージョンを固定しているか。固定しないと、ある日の実行から挙動が変わる。ジョブの Python バージョンで動くかも確認する
 
 ## 8. 運用設定
 
@@ -149,7 +179,7 @@ Python Shell ではジョブブックマークが使えない。「どこまで�
 ## 9. セキュリティ
 
 - 認証情報や API キーのハードコードがないか。AWS リソースへのアクセスはジョブの IAM ロールで行い、DB のパスワードや外部 API のキーは Secrets Manager や Glue Connection から取得する
-- IAM ロールの権限が必要な範囲に絞られているか（バケット全体・`*` への権限になっていないか）
+- IAM ロールの権限が、ジョブが行う操作とリソースに対して最小限か。`*` があるだけで過剰権限と判定しない（AWS の操作には、リソースを個別に指定できず `*` が必要なものもある）。必要な操作・リソースより明らかに広い権限（使わない操作の許可、無関係なバケット全体への書き込み など）を指摘し、`*` を使っている場合は、その理由が説明できるかを確認する
 - ログに個人情報や機密値（レコードの中身、トークンなど）を出力していないか
 - VPC 内のリソース（RDS など）に接続する場合、Glue Connection の設定が前提として整理されているか
 
@@ -164,8 +194,33 @@ Python Shell ではジョブブックマークが使えない。「どこまで�
 
 ## 主な参考ドキュメント
 
-- Python Shell ジョブ: https://docs.aws.amazon.com/glue/latest/dg/add-job-python.html
+### AWS Glue
+
+- Python Shell ジョブ（library-set、同梱ライブラリのバージョン、ログの出力先）: https://docs.aws.amazon.com/glue/latest/dg/add-job-python.html
 - AWS Glue のジョブパラメータ: https://docs.aws.amazon.com/glue/latest/dg/aws-glue-programming-etl-glue-arguments.html
 - AWS Glue 開発者ガイド: https://docs.aws.amazon.com/glue/latest/dg/
-- boto3 のリトライ設定: https://boto3.amazonaws.com/v1/documentation/api/latest/guide/retries.html
-- boto3 のページネーション: https://boto3.amazonaws.com/v1/documentation/api/latest/guide/paginators.html
+
+### boto3
+
+- リトライ（既定の動作、`max_attempts` と `total_max_attempts`）: https://docs.aws.amazon.com/boto3/latest/guide/retries.html
+- ページネーション: https://docs.aws.amazon.com/boto3/latest/guide/paginators.html
+- DynamoDB（`batch_writer()` の自動再送）: https://docs.aws.amazon.com/boto3/latest/guide/dynamodb.html
+
+### Athena
+
+- `CTAS` の注意点（失敗時に残るファイル、`external_location`）: https://docs.aws.amazon.com/athena/latest/ug/considerations-ctas.html
+- パラメータ化クエリ: https://docs.aws.amazon.com/athena/latest/ug/querying-with-prepared-statements.html
+
+### Redshift Data API
+
+- Data API の使い方: https://docs.aws.amazon.com/redshift/latest/mgmt/data-api.html
+- ExecuteStatement（`ClientToken`、`WaitTimeSeconds`）: https://docs.aws.amazon.com/redshift-data/latest/APIReference/API_ExecuteStatement.html
+- DescribeStatement（状態の確認）: https://docs.aws.amazon.com/redshift-data/latest/APIReference/API_DescribeStatement.html
+- BatchExecuteStatement: https://docs.aws.amazon.com/redshift-data/latest/APIReference/API_BatchExecuteStatement.html
+
+### その他
+
+- IAM のベストプラクティス（最小権限）: https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html
+- 各サービスの操作ごとのリソース指定の可否（Service Authorization Reference）: https://docs.aws.amazon.com/service-authorization/latest/reference/reference.html
+- pandas `read_csv`（`usecols` / `dtype` / `chunksize` / `encoding`）: https://pandas.pydata.org/docs/reference/api/pandas.read_csv.html
+- Requests のタイムアウト: https://requests.readthedocs.io/en/latest/user/advanced/#timeouts
