@@ -1,0 +1,36 @@
+# フロントエンド設計ガイドライン
+
+- 技術スタック
+  - **言語**: TypeScript, JavaScript
+  - **フレームワーク**: Next.js, React
+  - **スタイリング**: Tailwind CSS
+- ルーティング
+  - App Routerを使用する
+  - ページコンポーネントは`app`ディレクトリ配下に配置する
+- ディレクトリ構成
+  - **app**: pageファイルやlayoutファイルなど画面ファイルの実装を行う
+  - **app/_components**: page.tsxやlayout.tsxが肥大化しないよう責務分割したコンポーネントの実装を行う
+  - **features**: 業務ロジックやページ内機能に特化したコンポーネントの実装を行う。`features`フォルダ配下に機能ごとのサブディレクトリを作成する
+    - コンポーネントの実装はサブディレクトリ直下で行う
+    - **`*.types.ts`**: 型定義は`types`サフィックスをつけて実装を行う
+    - **`*.constants.ts`**: 定数定義は`constants`サフィックスをつけて実装を行う
+    - **hooks**: カスタムフックの実装を行う
+  - **components**: プロジェクト内の再利用可能なコンポーネントの実装を行う。フォルダ内は*AtomicDesign*で構成(atoms/molecules/organisms/templates)する
+    - components実装ではtypesは実装ファイル内に定義して、分離しない
+  - **dictionaries**: i18nで使用する言語ごとの文言ファイル（`ja.json`、`en.json`など）を配置する。読み込み処理は`lib`に実装する
+  - **hooks**: カスタムフックの実装を行う。機能固有のものについては上述のように`features`フォルダ内で実装を行う
+  - **lib**: 外部SDKのラッパーや環境変数に依存するような実装を行う
+  - **utils**: (任意)純粋関数の実装を行う。プロジェクトが小規模な場合は`lib`フォルダに統合しても良い
+  - **types**: アプリ全体で横断的に使用する型定義の実装を行う
+  - **constants**: アプリ全体で横断的に定数の実装を行う
+- 命名規則
+  - フォルダ名とファイル名は原則`kebab-case`とする
+  - **app router**: 通常のルートフォルダ名は`kebab-case`とする。ルートグループは`(group-name)`、動的ルートは`[param-name]`、キャッチオールルートは`[...param-name]`のようにNext.jsの構文を優先する
+    - `page.tsx`、`layout.tsx`、`loading.tsx`、`error.tsx`、`not-found.tsx`、`global-error.tsx`、`route.ts`、`template.tsx`、`default.tsx`など、App Routerの予約ファイル名はNext.jsの規則どおりに記述する
+    - `_components`のようなプライベートフォルダは、先頭の`_`を付けるNext.jsの規則を優先し、以降の名前は`PascalCase`とする
+  - **コンポーネント**: ファイル名は`PascalCase`とし、コンポーネント名はファイル名と同一にする
+  - **Hooks**: ファイル名は`use-`で始まる`camelCase`とし、カスタムフック名ファイル名と同一にする
+  - **utils・lib・hooksなどの実装ファイル**: ファイル名は`kebab-case`とする
+  - **types**: ファイル名は`kebab-case`で`*.types.ts`とし、型名は`PascalCase`とする
+  - **constants**: ファイル名は`kebab-case`で`*.constants.ts`とし、定数名は`UPPER_SNAKE_CASE`とする
+  - **dictionaries**: 言語コードは`ja.json`、`en.json`のように小文字で記述し、ページ固有のファイル名は`kebab-case`とする

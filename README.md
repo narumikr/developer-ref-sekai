@@ -15,6 +15,11 @@
 - `backend-design.md`: バックエンドの設計ガイドライン
 - `backend-review-point.md`: バックエンドのレビューガイドライン
 
+### **frontend/**
+
+- `frontend-design.md`: フロントエンドの設計ガイドライン
+- `frontend-review-point.md`: フロントエンドのレビューガイドライン
+
 ### **copilot/**
 
 - `instructions/backend-code-review.instructions.md`: GitHub Copilot用のバックエンドレビューファイル

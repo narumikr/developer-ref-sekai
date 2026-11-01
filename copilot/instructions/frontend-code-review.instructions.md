@@ -35,11 +35,16 @@ description: "フロントエンド(Next.js/Reactなど)のコードレビュー
   - コンポーネント内で完結する場合は`useState`を使用する
   - ページを跨いでの状態管理が必要な場合は`Context API`や`zustand`の使用を検討する
 - 命名規則
-  - **app router**: フォルダ名は`kebab-case`とし、ファイル名はNext.JsのAppRouterファイルの規則に従う(page.tsx, layout.tsx)
+  - フォルダ名とファイル名は原則`kebab-case`とする
+  - **app router**: 通常のルートフォルダ名は`kebab-case`とする。ルートグループは`(group-name)`、動的ルートは`[param-name]`、キャッチオールルートは`[...param-name]`のようにNext.jsの構文を優先する
+    - `page.tsx`、`layout.tsx`、`loading.tsx`、`error.tsx`、`not-found.tsx`、`global-error.tsx`、`route.ts`、`template.tsx`、`default.tsx`など、App Routerの予約ファイル名はNext.jsの規則どおりに記述する
+    - `_components`のようなプライベートフォルダは、先頭の`_`を付けるNext.jsの規則を優先し、以降の名前は`PascalCase`とする
   - **コンポーネント**: ファイル名は`PascalCase`とし、コンポーネント名はファイル名と同一にする
-  - **utils**: ファイル名は`camelCase`とし、関数名も`camelCase`とする
-  - **types**: ファイル名は`PascalCase`で`*.types.ts`とセマンティックネーミングで作成し、型名も`PascalCase`とする
-  - **constants**: ファイル名は`kebab-case`で`*.constants.ts`とセマンティックネーミングで作成し、定数名は`UPPER_SNAKE_CASE`とする
+  - **Hooks**: ファイル名は`use-`で始まる`camelCase`とし、カスタムフック名はファイル名と同一にする
+  - **utils・lib・hooksなどの実装ファイル**: ファイル名は`kebab-case`とする
+  - **types**: ファイル名は`kebab-case`で`*.types.ts`とし、型名は`PascalCase`とする
+  - **constants**: ファイル名は`kebab-case`で`*.constants.ts`とし、定数名は`UPPER_SNAKE_CASE`とする
+  - **dictionaries**: 言語コードは`ja.json`、`en.json`のように小文字で記述し、ページ固有のファイル名は`kebab-case`とする
 - i18n多言語対応
   - 共通文言は`common.json`などの共通ファイルにまとめる(汎用文言やComponentsで使用する文言など)
   - ページ固有の文言はページごとに`{page-name}.json`のようにファイルを分ける
